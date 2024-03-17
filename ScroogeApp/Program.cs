@@ -1,25 +1,41 @@
 ﻿using System.Net;
-using System.Text;
+using System.Text.Json;
+using ScroogeApp.Extensions;
 using ScroogeApp.Models;
 
-var userHtmlTemplate = @"<div>
-    <p><i>Name: </i>{{name}}</p>
-    <p><i>Surname: </i>{{surname}}</p>
-    <p><i>Birthdate: </i>{{birthdate}}</p>
-</div>";
+async Task LayoutAsync(HttpListenerResponse response, string bodyHtml, string layoutName = "layout") {
+    response.ContentType = "text/html";
+    using var streamWriter = new StreamWriter(response.OutputStream);
 
-List<User> users = new List<User>() {
-    new() {
-        Name = "Bob",
-        Surname = "Marley",
-        BirthDate = new DateTime(1998, 7, 7)
-    },
-    new() {
-        Name = "Ann",
-        Surname = "Brown",
-        BirthDate = new DateTime(2002, 5, 11)
+    var html = (await File.ReadAllTextAsync($"{layoutName}.html"))
+        .Replace("{{body}}", bodyHtml);
+
+    await streamWriter.WriteLineAsync(html);
+    response.StatusCode = (int)HttpStatusCode.OK;
+}
+
+async Task NotFoundAsync(HttpListenerResponse response, string resourceName) {
+    Dictionary<string, object>? viewValues = new() {
+        {"resource", resourceName}
+    };
+
+    await WriteViewAsync(response, "notfound", viewValues);
+}
+
+async Task WriteViewAsync(HttpListenerResponse response, string viewName, Dictionary<string, object>? viewValues = null, string? layoutName = null)
+{
+    var html = await File.ReadAllTextAsync($"{viewName}.html");
+
+    if (viewValues is not null)
+    {
+        foreach (var viewValue in viewValues)
+        {
+            html = html.Replace("{{" + viewValue.Key + "}}", viewValue.Value.ToString());
+        }
     }
-};
+    
+    await LayoutAsync(response, html, layoutName ?? "layout");
+}
 
 var httpListener = new HttpListener();
 
@@ -29,7 +45,7 @@ httpListener.Prefixes.Add(prexif);
 
 httpListener.Start();
 
-System.Console.WriteLine($"Server started... {prexif}");
+System.Console.WriteLine($"Server started... {prexif.Replace("*", "localhost")}");
 
 while (true)
 {
@@ -39,47 +55,30 @@ while (true)
 
     switch (endpoint)
     {
-        // Get all users
+        case "/":
+            {
+                await WriteViewAsync(client.Response, "index");
+                break;
+            }
         case "/Users":
             {
-                // // JSON
-                // client.Response.ContentType = "application/json";
-                // using var streamWriter = new StreamWriter(client.Response.OutputStream);
-
-                // await streamWriter.WriteLineAsync(JsonSerializer.Serialize(users));
-                // break;
-
-
-                // HTML
-                var sb = new StringBuilder(capacity: userHtmlTemplate.Length * users.Count);
-
-                foreach (var user in users)
-                {
-                    var userHtml = userHtmlTemplate
-                        .Replace("{{name}}", user.Name)
-                        .Replace("{{surname}}", user.Surname)
-                        .Replace("{{birthdate}}", user.BirthDate.ToString());
-                    
-                    sb.Append(userHtml + "<hr>");
+                var usersJson = await File.ReadAllTextAsync("users.json");
+                var users = JsonSerializer.Deserialize<IEnumerable<User>>(usersJson);
+                
+                if(users is not null && users.Any()) {
+                    var html = users.AsHtml();
+                    await LayoutAsync(client.Response, html);
+                }
+                else {
+                    await NotFoundAsync(client.Response, nameof(users));
                 }
 
-                client.Response.ContentType = "text/html";
-                using var streamWriter = new StreamWriter(client.Response.OutputStream);
-
-                await streamWriter.WriteLineAsync(sb.ToString());
-                client.Response.StatusCode = (int)HttpStatusCode.OK;
                 break;
             }
         default:
             {
-                client.Response.ContentType = "text/html";
-                using var streamWriter = new StreamWriter(client.Response.OutputStream);
+                await NotFoundAsync(client.Response, endpoint!);
 
-                var html = (await File.ReadAllTextAsync("notfound.html"))
-                    .Replace("{{endpoint}}", endpoint);
-
-                await streamWriter.WriteLineAsync(html);
-                client.Response.StatusCode = (int)HttpStatusCode.OK;
                 break;
             }
     }
