@@ -1,41 +1,52 @@
 ﻿using System.Net;
-using System.Text.Json;
-using ScroogeApp.Extensions;
-using ScroogeApp.Models;
+using System.Reflection;
+using ScroogeApp.Attributes.Http.Base;
+using ScroogeApp.Controllers.Base;
+using ScroogeApp.Repositories;
 
-async Task LayoutAsync(HttpListenerResponse response, string bodyHtml, string layoutName = "layout") {
-    response.ContentType = "text/html";
-    using var streamWriter = new StreamWriter(response.OutputStream);
-
-    var html = (await File.ReadAllTextAsync($"{layoutName}.html"))
-        .Replace("{{body}}", bodyHtml);
-
-    await streamWriter.WriteLineAsync(html);
-    response.StatusCode = (int)HttpStatusCode.OK;
-}
-
-async Task NotFoundAsync(HttpListenerResponse response, string resourceName) {
-    Dictionary<string, object>? viewValues = new() {
-        {"resource", resourceName}
-    };
-
-    await WriteViewAsync(response, "notfound", viewValues);
-}
-
-async Task WriteViewAsync(HttpListenerResponse response, string viewName, Dictionary<string, object>? viewValues = null, string? layoutName = null)
+async Task<bool> CallMethodAsync(ControllerBase controllerBase, string methodName, string httpMethod)
 {
-    var html = await File.ReadAllTextAsync($"{viewName}.html");
-
-    if (viewValues is not null)
-    {
-        foreach (var viewValue in viewValues)
+    var method = controllerBase.GetType().GetMethods()
+        .FirstOrDefault(method =>
         {
-            html = html.Replace("{{" + viewValue.Key + "}}", viewValue.Value.ToString());
-        }
+            foreach (var customAttribute in method.CustomAttributes)
+            {
+                var attributeType = customAttribute.AttributeType;
+                if (attributeType.BaseType == typeof(HttpAttribute))
+                {
+                    var actionNameArgument = customAttribute.NamedArguments.FirstOrDefault(arg => arg.MemberName == "ActionName");
+                    var actionName = actionNameArgument.TypedValue.Value?.ToString() ?? method.Name;
+
+                    var obj = Activator.CreateInstance(attributeType);
+                    var httpAttribute = (Activator.CreateInstance(attributeType) as HttpAttribute)!;
+
+                    if (httpAttribute.MethodType.ToUpper() == httpMethod.ToUpper()
+                    && actionName?.ToUpper() == methodName.ToUpper())
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        });
+
+    if (method is null)
+    {
+        return false;
     }
-    
-    await LayoutAsync(response, html, layoutName ?? "layout");
+
+    var result = method.Invoke(controllerBase, null);
+
+    if (result != null && result is Task taskResult)
+    {
+        await taskResult;
+    }
+
+    return true;
 }
+
+var usersRepository = new UserSqlRepository();
 
 var httpListener = new HttpListener();
 
@@ -49,39 +60,55 @@ System.Console.WriteLine($"Server started... {prexif.Replace("*", "localhost")}"
 
 while (true)
 {
-    var client = await httpListener.GetContextAsync();
+    var context = await httpListener.GetContextAsync();
 
-    string? endpoint = client.Request.RawUrl;
+    string? endpoint = context.Request.RawUrl;
+    System.Console.WriteLine($"endpoint: {endpoint}");
 
-    switch (endpoint)
+    if (string.IsNullOrWhiteSpace(endpoint))
     {
-        case "/":
-            {
-                await WriteViewAsync(client.Response, "index");
-                break;
-            }
-        case "/Users":
-            {
-                var usersJson = await File.ReadAllTextAsync("users.json");
-                var users = JsonSerializer.Deserialize<IEnumerable<User>>(usersJson);
-                
-                if(users is not null && users.Any()) {
-                    var html = users.AsHtml();
-                    await LayoutAsync(client.Response, html);
-                }
-                else {
-                    await NotFoundAsync(client.Response, nameof(users));
-                }
-
-                break;
-            }
-        default:
-            {
-                await NotFoundAsync(client.Response, endpoint!);
-
-                break;
-            }
+        continue;
     }
 
-    client.Response.Close();
+    var enpointItems = endpoint == "/"
+        ? new string[] { "Home" }
+        : endpoint.Split("/", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    var controllerNormalizedName = enpointItems.First().ToLower();
+
+    var controllerType = Assembly.GetExecutingAssembly().GetTypes()
+        .FirstOrDefault(type => type.Name.ToLower() == $"{controllerNormalizedName}controller");
+
+    if (controllerType is null)
+    {
+        continue;
+    }
+
+    // /controller                  -> controllerType.Index()
+    // /controller/myendpoint       -> controllerType.MyEndpoint()
+    // /controller/myendpoint/123   -> controllerType.MyEndpoint(123)
+
+    var controllerObj = Activator.CreateInstance(controllerType);
+
+    if (controllerObj is not ControllerBase)
+    {
+        continue;
+    }
+
+    var controller = (controllerObj as ControllerBase)!;
+    controller.Response = context.Response;
+
+    // call Index() method
+    if (enpointItems.Length == 1)
+    {
+        await CallMethodAsync(controller, "index", context.Request.HttpMethod);
+    }
+    // call enpointItems[1]() method
+    else
+    {
+        var methodNameToCall = enpointItems[1].ToLower();
+        await CallMethodAsync(controller, methodNameToCall, context.Request.HttpMethod);
+    }
+
+    context.Response.Close();
 }
