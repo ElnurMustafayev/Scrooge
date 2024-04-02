@@ -5,6 +5,7 @@ using System.Net;
 public abstract class ControllerBase
 {
     public HttpListenerResponse? Response { get; set; }
+    public HttpListenerRequest? Request { get; set; }
 
     protected async Task LayoutAsync(string bodyHtml, string layoutName = "layout")
     {

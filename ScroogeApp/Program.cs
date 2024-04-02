@@ -46,6 +46,24 @@ async Task<bool> CallMethodAsync(ControllerBase controllerBase, string methodNam
     return true;
 }
 
+string[] GetEndpointItems(string endpoint) {
+    if(endpoint == "/") {
+        return new string[] { "Home" };
+    }
+
+    else if(endpoint.Contains('?')) {
+        var queryParametersStartIndex = endpoint.LastIndexOf('?');
+
+        return endpoint[..queryParametersStartIndex]
+            .Split("/", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    else {
+        return endpoint
+            .Split("/", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+}
+
 var usersRepository = new UserSqlRepository();
 
 var httpListener = new HttpListener();
@@ -63,16 +81,13 @@ while (true)
     var context = await httpListener.GetContextAsync();
 
     string? endpoint = context.Request.RawUrl;
-    System.Console.WriteLine($"endpoint: {endpoint}");
 
     if (string.IsNullOrWhiteSpace(endpoint))
     {
         continue;
     }
 
-    var enpointItems = endpoint == "/"
-        ? new string[] { "Home" }
-        : endpoint.Split("/", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    var enpointItems = GetEndpointItems(endpoint);
 
     var controllerNormalizedName = enpointItems.First().ToLower();
 
@@ -97,6 +112,7 @@ while (true)
 
     var controller = (controllerObj as ControllerBase)!;
     controller.Response = context.Response;
+    controller.Request = context.Request;
 
     // call Index() method
     if (enpointItems.Length == 1)
