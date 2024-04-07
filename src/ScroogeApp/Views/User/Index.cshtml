@@ -1,0 +1,29 @@
+@{
+    ViewData["Title"] = "Users";
+
+    var userRepository = new UserSqlRepository();
+    var users = await userRepository.GetAllUsersAsync();
+}
+
+<style>
+
+    .user-card {
+        width: fit-content;
+        margin: 10px;
+        padding: 10px;
+
+        border: 1px solid black;
+        border-radius: 5px;
+    }
+
+</style>
+
+<h1>@ViewData["Title"]</h1>
+
+@foreach(var user in users)
+{
+    <div class="user-card">
+        <p>@user.Name @user.Surname</p>
+        <input type="datetime" value="@user.BirthDate" readonly/>
+    </div>
+}
